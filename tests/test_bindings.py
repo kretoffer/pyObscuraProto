@@ -11,9 +11,9 @@ sys.path.insert(0, build_dir)
 sys.path.insert(0, os.path.join(build_dir, 'lib'))
 
 try:
-    import pyObscuraProto as op
+    import ObscuraProto as op
 except ImportError:
-    pytest.fail(f"Could not import pyObscuraProto. Make sure it's built and check sys.path. Current sys.path includes: '{build_dir}' and '{os.path.join(build_dir, 'lib')}'", pytrace=False)
+    pytest.fail(f"Could not import ObscuraProto. Make sure it's built and check sys.path. Current sys.path includes: '{build_dir}' and '{os.path.join(build_dir, 'lib')}'", pytrace=False)
 
 
 def test_read_int_uint_and_peek():

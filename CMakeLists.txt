@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(pyObscuraProto)
+project(ObscuraProto)
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
@@ -26,8 +26,8 @@ FetchContent_MakeAvailable(ObscuraProto)
 
 # Create the Python module using the pybind11 helper function.
 # This module will be named 'pyObscuraProto' and will be built from our bindings file.
-pybind11_add_module(pyObscuraProto src/pyObscuraProto/bindings.cpp)
+pybind11_add_module(ObscuraProto src/ObscuraProto/bindings.cpp)
 
 # Link our Python module against the ObscuraProto library.
 # This makes all the functions and classes from ObscuraProto available to our binding code.
-target_link_libraries(pyObscuraProto PRIVATE obscuraproto)
+target_link_libraries(ObscuraProto PRIVATE obscuraproto)
