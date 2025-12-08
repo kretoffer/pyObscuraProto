@@ -31,36 +31,35 @@ def test_high_level_opcode_callbacks(crypto_init, capsys):
     server_responses_to_send = []
     client_is_ready = False
 
-    # --- Callbacks and Handlers ---
+    # 1. Create Server and Client instances
+    server = op.Server()
+    client = op.Client(server.public_key)
+
+    # --- Callbacks and Handlers (using the new decorator) ---
     def on_client_ready():
         nonlocal client_is_ready
         client_is_ready = True
 
+    @server.handle_op_code(OP_GET_STATUS)
     def handler_get_status(payload):
         server_received_payloads.append(payload)
         response_payload = op.PayloadBuilder(0x6001).add_param("Server is OK").build()
         server_responses_to_send.append(response_payload)
 
+    @server.handle_op_code(OP_ECHO)
     def handler_echo(payload):
         server_received_payloads.append(payload)
-        server_responses_to_send.append(payload) # Echo back
+        server_responses_to_send.append(payload)  # Echo back
 
+    @server.default_handler
     def default_server_handler(payload):
         server_received_payloads.append(payload)
 
+    @client.default_handler
     def default_client_handler(payload):
         client_received_payloads.append(payload)
 
-    # 1. Create Server and Client instances
-    server = op.Server()
-    client = op.Client(server.public_key)
-
-    # 2. Register handlers and callbacks
-    server.register_op_handler(OP_GET_STATUS, handler_get_status)
-    server.register_op_handler(OP_ECHO, handler_echo)
-    server.set_default_payload_handler(default_server_handler)
-    
-    client.set_default_payload_handler(default_client_handler)
+    # 2. Register remaining handlers and callbacks
     client.set_on_ready_callback(on_client_ready)
 
     # 3. Connect client to server (handshake happens automatically)
@@ -72,7 +71,7 @@ def test_high_level_opcode_callbacks(crypto_init, capsys):
     client.send(op.PayloadBuilder(OP_GET_STATUS).build())
     client.send(op.PayloadBuilder(OP_ECHO).add_param("echo this!").build())
     client.send(op.PayloadBuilder(OP_UNHANDLED).build())
-    
+
     # 5. Verify server received all messages
     assert len(server_received_payloads) == 3
     assert server_received_payloads[0].op_code == OP_GET_STATUS
@@ -87,12 +86,12 @@ def test_high_level_opcode_callbacks(crypto_init, capsys):
 
     # 7. Verify client received the responses
     assert len(client_received_payloads) == 2
-    
+
     # Check OP_GET_STATUS response
     assert client_received_payloads[0].op_code == 0x6001
     reader1 = op.PayloadReader(client_received_payloads[0])
     assert reader1.read_string() == "Server is OK"
-    
+
     # Check OP_ECHO response
     assert client_received_payloads[1].op_code == OP_ECHO
     reader2 = op.PayloadReader(client_received_payloads[1])

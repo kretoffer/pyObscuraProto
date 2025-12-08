@@ -61,9 +61,40 @@ class _BasePeer:
         """Registers a handler for a specific opcode."""
         self._session.register_op_handler(opcode, handler)
 
+    def handle_op_code(self, opcode):
+        """
+        A decorator to register a handler for a specific opcode.
+
+        Example:
+            server = Server()
+            @server.handle_op_code(0x5000)
+            def my_handler(payload):
+                print(f"Handling payload for op {payload.op_code}")
+
+        Args:
+            opcode (int): The operation code to handle.
+        """
+        def decorator(handler):
+            """The actual decorator that registers the function."""
+            self.register_op_handler(opcode, handler)
+            return handler
+        return decorator
+
     def set_default_payload_handler(self, handler):
         """Sets the default handler for unhandled opcodes."""
         self._session.set_default_payload_handler(handler)
+
+    def default_handler(self, handler):
+        """
+        A decorator to register a function as the default handler for unhandled opcodes.
+
+        Example:
+            @server.default_handler
+            def my_default_handler(payload):
+                print("Received an unhandled payload")
+        """
+        self.set_default_payload_handler(handler)
+        return handler
 
     def _receive_encrypted(self, packet):
         """Internal method to receive and decrypt a packet."""
