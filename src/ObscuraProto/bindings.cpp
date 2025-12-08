@@ -51,15 +51,6 @@ public:
 
     Payload decrypt_packet(const byte_vector& packet) {
         auto payload = session.decrypt_packet(packet);
-
-        py::gil_scoped_acquire acquire;
-        auto it = op_handlers.find(payload.op_code);
-        if (it != op_handlers.end()) {
-            it->second(payload);
-        } else if (default_payload_handler) {
-            default_payload_handler(payload);
-        }
-        
         return payload;
     }
 
@@ -79,19 +70,9 @@ public:
         on_handshake_complete = std::move(callback);
     }
 
-    void register_op_handler(uint16_t op_code, py::function callback) {
-        op_handlers[op_code] = std::move(callback);
-    }
-
-    void set_default_payload_handler(py::function callback) {
-        default_payload_handler = std::move(callback);
-    }
-
 private:
     ObscuraProto::Session session;
     py::function on_handshake_complete;
-    py::function default_payload_handler;
-    std::map<uint16_t, py::function> op_handlers;
 };
 
 PYBIND11_MODULE(_obscuraproto, m) {
@@ -236,7 +217,5 @@ PYBIND11_MODULE(_obscuraproto, m) {
         .def("decrypt_packet", &PySessionWrapper::decrypt_packet)
         .def("is_handshake_complete", &PySessionWrapper::is_handshake_complete)
         .def("get_selected_version", &PySessionWrapper::get_selected_version)
-        .def("set_on_handshake_complete", &PySessionWrapper::set_on_handshake_complete, "Sets the callback for when the handshake is complete.")
-        .def("register_op_handler", &PySessionWrapper::register_op_handler, "Registers a handler for a specific opcode.")
-        .def("set_default_payload_handler", &PySessionWrapper::set_default_payload_handler, "Sets the default handler for unhandled opcodes.");
+        .def("set_on_handshake_complete", &PySessionWrapper::set_on_handshake_complete, "Sets the callback for when the handshake is complete.");
 }

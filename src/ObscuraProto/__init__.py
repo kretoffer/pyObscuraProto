@@ -45,6 +45,56 @@ V1_0 = _bindings.V1_0
 SUPPORTED_VERSIONS = _bindings.SUPPORTED_VERSIONS
 
 
+"""
+ObscuraProto high-level Python library.
+"""
+import asyncio
+import inspect
+
+try:
+    # This is the C++ extension module built by CMake.
+    from . import _obscuraproto as _bindings
+except ImportError:
+    # If the extension is not in the same directory, it might be in the build/lib directory.
+    # This is a fallback for development environments. For a real installation,
+    # the package structure would handle this.
+    import sys
+    import os
+    
+    # Heuristic to find the build directory.
+    # Assumes the project root is two levels up from this file's directory.
+    proj_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    build_dir = os.path.join(proj_root, 'build')
+    lib_dir = os.path.join(build_dir, 'lib')
+    
+    if os.path.isdir(lib_dir):
+         sys.path.insert(0, lib_dir)
+    elif os.path.isdir(build_dir):
+        sys.path.insert(0, build_dir)
+
+    try:
+        import _obscuraproto as _bindings
+    except ImportError as e:
+        raise ImportError(
+            "Could not import the compiled ObscuraProto C++ bindings (_obscuraproto). "
+            "Please make sure the project is built. "
+            f"Original error: {e}"
+        )
+
+
+# --- Re-export low-level components ---
+Role = _bindings.Role
+Crypto = _bindings.Crypto
+Payload = _bindings.Payload
+PayloadBuilder = _bindings.PayloadBuilder
+PayloadReader = _bindings.PayloadReader
+KeyPair = _bindings.KeyPair
+PublicKey = _bindings.PublicKey
+PrivateKey = _bindings.PrivateKey
+V1_0 = _bindings.V1_0
+SUPPORTED_VERSIONS = _bindings.SUPPORTED_VERSIONS
+
+
 # --- High-level wrapper classes ---
 
 class _BasePeer:
@@ -56,10 +106,46 @@ class _BasePeer:
             raise TypeError("session must be a _bindings.Session object")
         self._session = session
         self.peer = None
+        self._op_handlers = {}
+        self._default_payload_handler = None
+        self._incoming_queue = asyncio.Queue()
+        self._processing_task = asyncio.create_task(self._process_incoming())
+
+    async def _process_incoming(self):
+        """A background task that processes the incoming message queue."""
+        try:
+            while True:
+                packet = await self._incoming_queue.get()
+                try:
+                    payload = self._session.decrypt_packet(packet)
+                    handler = self._op_handlers.get(payload.op_code)
+
+                    if handler:
+                        if inspect.iscoroutinefunction(handler):
+                            asyncio.create_task(handler(payload))
+                        else:
+                            handler(payload)
+                    elif self._default_payload_handler:
+                        if inspect.iscoroutinefunction(self._default_payload_handler):
+                            asyncio.create_task(self._default_payload_handler(payload))
+                        else:
+                            self._default_payload_handler(payload)
+
+                except Exception as e:
+                    print(f"[SYSTEM] Error processing packet: {e}")
+                finally:
+                    self._incoming_queue.task_done()
+        except asyncio.CancelledError:
+            # Task was cancelled, which is the signal to stop.
+            pass
+
+    def close(self):
+        """Cancels the background processing task."""
+        self._processing_task.cancel()
 
     def register_op_handler(self, opcode, handler):
         """Registers a handler for a specific opcode."""
-        self._session.register_op_handler(opcode, handler)
+        self._op_handlers[opcode] = handler
 
     def handle_op_code(self, opcode):
         """
@@ -68,7 +154,7 @@ class _BasePeer:
         Example:
             server = Server()
             @server.handle_op_code(0x5000)
-            def my_handler(payload):
+            async def my_handler(payload):
                 print(f"Handling payload for op {payload.op_code}")
 
         Args:
@@ -82,7 +168,7 @@ class _BasePeer:
 
     def set_default_payload_handler(self, handler):
         """Sets the default handler for unhandled opcodes."""
-        self._session.set_default_payload_handler(handler)
+        self._default_payload_handler = handler
 
     def default_handler(self, handler):
         """
@@ -90,17 +176,17 @@ class _BasePeer:
 
         Example:
             @server.default_handler
-            def my_default_handler(payload):
+            async def my_default_handler(payload):
                 print("Received an unhandled payload")
         """
         self.set_default_payload_handler(handler)
         return handler
 
     def _receive_encrypted(self, packet):
-        """Internal method to receive and decrypt a packet."""
-        self._session.decrypt_packet(packet)
+        """Internal method to queue an encrypted packet for processing."""
+        self._incoming_queue.put_nowait(packet)
     
-    def send(self, payload):
+    async def send(self, payload):
         """
         Encrypts and sends a payload to the connected peer.
         
@@ -114,6 +200,8 @@ class _BasePeer:
             
         encrypted_packet = self._session.encrypt_payload(payload)
         self.peer._receive_encrypted(encrypted_packet)
+        # Yield control to simulate non-blocking network I/O
+        await asyncio.sleep(0)
 
 
 class Server(_BasePeer):
@@ -153,12 +241,12 @@ class Client(_BasePeer):
 
     def set_on_ready_callback(self, callback):
         """
-
         Sets a callback to be fired when the handshake is successfully completed.
+        The callback can be a regular function or a coroutine.
         """
         self._on_ready_callback = callback
 
-    def connect(self, server_peer):
+    async def connect(self, server_peer):
         """
         Connects to a server peer and performs the handshake under the hood.
 
@@ -172,17 +260,23 @@ class Client(_BasePeer):
         self.peer = server_peer
         server_peer.peer = self
         
-        # Perform the 3-step handshake
+        # Perform the 3-step handshake, simulating network latency
         client_hello = self._session.client_initiate_handshake()
-        # In this simulation, we pass the data directly.
-        # In a real network, this would be sent over a transport.
+        await asyncio.sleep(0)
+        
         server_hello = server_peer._session.server_respond_to_handshake(client_hello)
+        await asyncio.sleep(0)
+
         self._session.client_finalize_handshake(server_hello)
+        await asyncio.sleep(0)
         
         if self._session.is_handshake_complete():
             print("[SYSTEM] Handshake complete.")
             if self._on_ready_callback:
-                self._on_ready_callback()
+                if inspect.iscoroutinefunction(self._on_ready_callback):
+                    await self._on_ready_callback()
+                else:
+                    self._on_ready_callback()
         else:
             print("[SYSTEM] Handshake failed.")
 
