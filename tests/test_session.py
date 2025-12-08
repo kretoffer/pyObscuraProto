@@ -3,18 +3,17 @@ import os
 import pytest
 
 # Add build directory to path to find the compiled module.
-build_dir = os.path.abspath('build')
+build_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'build'))
 lib_dir = os.path.join(build_dir, 'lib')
 
-# In some cases, the .so file is directly in 'build', in others, it's in 'build/lib'
 sys.path.insert(0, build_dir)
 if os.path.isdir(lib_dir):
     sys.path.insert(0, lib_dir)
 
 try:
-    import ObscuraProto as op
+    import _obscuraproto as op
 except ImportError as e:
-    pytest.fail(f"Could not import ObscuraProto: {e}. Make sure it's built. Searched in: {sys.path}", pytrace=False)
+    pytest.fail(f"Could not import _obscuraproto: {e}. Make sure it's built. Searched in: {sys.path}", pytrace=False)
 
 
 @pytest.fixture(scope="module")
@@ -52,15 +51,15 @@ def test_full_handshake(crypto_init, server_keys):
     server = op.Session(op.Role.SERVER, server_keys)
 
     # 1. Client initiates
-    client_hello = client.client_initiate_handshake()
-    assert isinstance(client_hello, op.ClientHello)
+    client_hello_data = client.client_initiate_handshake()
+    assert isinstance(client_hello_data, list)
 
     # 2. Server responds
-    server_hello = server.server_respond_to_handshake(client_hello)
-    assert isinstance(server_hello, op.ServerHello)
+    server_hello_data = server.server_respond_to_handshake(client_hello_data)
+    assert isinstance(server_hello_data, list)
 
     # 3. Client finalizes
-    client.client_finalize_handshake(server_hello)
+    client.client_finalize_handshake(server_hello_data)
 
     # 4. Verify handshake is complete on both ends
     assert client.is_handshake_complete()
@@ -80,9 +79,9 @@ def test_encryption_decryption(crypto_init, server_keys):
     server = op.Session(op.Role.SERVER, server_keys)
 
     # Perform handshake first
-    client_hello = client.client_initiate_handshake()
-    server_hello = server.server_respond_to_handshake(client_hello)
-    client.client_finalize_handshake(server_hello)
+    client_hello_data = client.client_initiate_handshake()
+    server_hello_data = server.server_respond_to_handshake(client_hello_data)
+    client.client_finalize_handshake(server_hello_data)
     
     assert client.is_handshake_complete()
     assert server.is_handshake_complete()

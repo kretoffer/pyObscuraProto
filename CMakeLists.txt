@@ -26,8 +26,8 @@ FetchContent_MakeAvailable(ObscuraProto)
 
 # Create the Python module using the pybind11 helper function.
 # This module will be named 'pyObscuraProto' and will be built from our bindings file.
-pybind11_add_module(ObscuraProto src/ObscuraProto/bindings.cpp)
+pybind11_add_module(_obscuraproto src/ObscuraProto/bindings.cpp)
 
 # Link our Python module against the ObscuraProto library.
 # This makes all the functions and classes from ObscuraProto available to our binding code.
-target_link_libraries(ObscuraProto PRIVATE obscuraproto)
+target_link_libraries(_obscuraproto PRIVATE obscuraproto)

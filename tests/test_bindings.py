@@ -3,17 +3,17 @@ import os
 import pytest
 
 # Add build directory to path to find the compiled module.
-build_dir = os.path.abspath('build')
+build_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'build'))
+lib_dir = os.path.join(build_dir, 'lib')
 
-# We expect the module to be in the root of the build output, or a subdirectory like 'lib'.
-# We add both to be safe.
 sys.path.insert(0, build_dir)
-sys.path.insert(0, os.path.join(build_dir, 'lib'))
+if os.path.isdir(lib_dir):
+    sys.path.insert(0, lib_dir)
 
 try:
-    import ObscuraProto as op
+    import _obscuraproto as op
 except ImportError:
-    pytest.fail(f"Could not import ObscuraProto. Make sure it's built and check sys.path. Current sys.path includes: '{build_dir}' and '{os.path.join(build_dir, 'lib')}'", pytrace=False)
+    pytest.fail(f"Could not import _obscuraproto. Make sure it's built and check sys.path. Current sys.path includes: '{build_dir}' and '{lib_dir}'", pytrace=False)
 
 
 def test_read_int_uint_and_peek():

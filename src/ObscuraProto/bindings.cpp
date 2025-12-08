@@ -7,11 +7,94 @@
 #include <obscuraproto/packet.hpp>
 #include <obscuraproto/session.hpp>
 #include <obscuraproto/version.hpp>
+#include <pybind11/functional.h>
+#include <map>
 
 namespace py = pybind11;
 using namespace ObscuraProto;
 
-PYBIND11_MODULE(ObscuraProto, m) {
+class PySessionWrapper {
+public:
+    PySessionWrapper(Role role, KeyPair key_pair) :
+        session(role, std::move(key_pair)) {}
+
+    byte_vector client_initiate_handshake() {
+        return session.client_initiate_handshake().serialize();
+    }
+
+    byte_vector server_respond_to_handshake(const byte_vector& client_hello_data) {
+        auto client_hello = ClientHello::deserialize(client_hello_data);
+        auto server_hello = session.server_respond_to_handshake(client_hello);
+        if (session.is_handshake_complete()) {
+            if (on_handshake_complete) {
+                py::gil_scoped_acquire acquire;
+                on_handshake_complete();
+            }
+        }
+        return server_hello.serialize();
+    }
+
+    void client_finalize_handshake(const byte_vector& server_hello_data) {
+        auto server_hello = ServerHello::deserialize(server_hello_data);
+        session.client_finalize_handshake(server_hello);
+        if (session.is_handshake_complete()) {
+            if (on_handshake_complete) {
+                py::gil_scoped_acquire acquire;
+                on_handshake_complete();
+            }
+        }
+    }
+
+    byte_vector encrypt_payload(const Payload& payload) {
+        return session.encrypt_payload(payload);
+    }
+
+    Payload decrypt_packet(const byte_vector& packet) {
+        auto payload = session.decrypt_packet(packet);
+
+        py::gil_scoped_acquire acquire;
+        auto it = op_handlers.find(payload.op_code);
+        if (it != op_handlers.end()) {
+            it->second(payload);
+        } else if (default_payload_handler) {
+            default_payload_handler(payload);
+        }
+        
+        return payload;
+    }
+
+    bool is_handshake_complete() const {
+        return session.is_handshake_complete();
+    }
+
+    py::object get_selected_version() const {
+        auto version = session.get_selected_version();
+        if (version.has_value()) {
+            return py::cast(version.value());
+        }
+        return py::none();
+    }
+
+    void set_on_handshake_complete(py::function callback) {
+        on_handshake_complete = std::move(callback);
+    }
+
+    void register_op_handler(uint16_t op_code, py::function callback) {
+        op_handlers[op_code] = std::move(callback);
+    }
+
+    void set_default_payload_handler(py::function callback) {
+        default_payload_handler = std::move(callback);
+    }
+
+private:
+    ObscuraProto::Session session;
+    py::function on_handshake_complete;
+    py::function default_payload_handler;
+    std::map<uint16_t, py::function> op_handlers;
+};
+
+PYBIND11_MODULE(_obscuraproto, m) {
     m.doc() = "Python bindings for the ObscuraProto C++ library";
 
     // Version
@@ -71,11 +154,6 @@ PYBIND11_MODULE(ObscuraProto, m) {
         .def(py::init<>())
         .def_readwrite("rx", &Crypto::SessionKeys::rx)
         .def_readwrite("tx", &Crypto::SessionKeys::tx);
-
-    py::class_<Crypto::DecryptedResult>(m, "DecryptedResult")
-        .def(py::init<>())
-        .def_readwrite("payload", &Crypto::DecryptedResult::payload)
-        .def_readwrite("counter", &Crypto::DecryptedResult::counter);
 
     // Packet
     py::class_<Payload>(m, "Payload")
@@ -149,13 +227,16 @@ PYBIND11_MODULE(ObscuraProto, m) {
         .value("SERVER", Role::SERVER)
         .export_values();
 
-    py::class_<Session>(m, "Session")
+    py::class_<PySessionWrapper>(m, "Session")
         .def(py::init<Role, KeyPair>())
-        .def("client_initiate_handshake", &Session::client_initiate_handshake)
-        .def("server_respond_to_handshake", &Session::server_respond_to_handshake)
-        .def("client_finalize_handshake", &Session::client_finalize_handshake)
-        .def("encrypt_payload", &Session::encrypt_payload)
-        .def("decrypt_packet", &Session::decrypt_packet)
-        .def("is_handshake_complete", &Session::is_handshake_complete)
-        .def("get_selected_version", &Session::get_selected_version);
+        .def("client_initiate_handshake", &PySessionWrapper::client_initiate_handshake)
+        .def("server_respond_to_handshake", &PySessionWrapper::server_respond_to_handshake)
+        .def("client_finalize_handshake", &PySessionWrapper::client_finalize_handshake)
+        .def("encrypt_payload", &PySessionWrapper::encrypt_payload)
+        .def("decrypt_packet", &PySessionWrapper::decrypt_packet)
+        .def("is_handshake_complete", &PySessionWrapper::is_handshake_complete)
+        .def("get_selected_version", &PySessionWrapper::get_selected_version)
+        .def("set_on_handshake_complete", &PySessionWrapper::set_on_handshake_complete, "Sets the callback for when the handshake is complete.")
+        .def("register_op_handler", &PySessionWrapper::register_op_handler, "Registers a handler for a specific opcode.")
+        .def("set_default_payload_handler", &PySessionWrapper::set_default_payload_handler, "Sets the default handler for unhandled opcodes.");
 }
