@@ -153,8 +153,17 @@ PYBIND11_MODULE(_obscuraproto, m) {
                     throw std::runtime_error("Invalid size for an unsigned integer parameter: " + std::to_string(size));
             }
         }, "Reads an unsigned integer, determining its size from the packet.")
-        .def("read_float", &PayloadReader::read_param<float>, "Reads a 32-bit float.")
-        .def("read_double", &PayloadReader::read_param<double>, "Reads a 64-bit double.");
+        .def("read_float", [](PayloadReader &self) -> double {
+            size_t size = self.peek_next_param_size();
+            switch (size) {
+                case 4:
+                    return self.read_param<float>();
+                case 8:
+                    return self.read_param<double>();
+                default:
+                    throw std::runtime_error("Invalid size for a float/double parameter: " + std::to_string(size));
+            }
+        }, "Reads a float or double, determining its size from the packet and returning it as a double.");
     
     // Session
     py::enum_<Role>(m, "Role")

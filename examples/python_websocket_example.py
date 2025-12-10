@@ -5,7 +5,7 @@ from ObscuraProto import (
     Server,
     Client,
     PayloadBuilder,
-    PayloadReader,
+    uint, # Import the new marker type
 )
 
 # --- Opcodes ---
@@ -16,22 +16,6 @@ OP_SERVER_RESPONSE = 0x2002
 client_ready_event = threading.Event()
 server_received_event = threading.Event()
 client_received_event = threading.Event()
-
-
-def print_payload(prefix, payload):
-    """Helper to print payload contents."""
-    print(f"{prefix} OpCode: 0x{payload.op_code:04x}")
-    reader = PayloadReader(payload)
-    try:
-        if payload.op_code == OP_CLIENT_MSG:
-            print(f"{prefix}   Message: '{reader.read_string()}'")
-            print(f"{prefix}   Value: {reader.read_int()}")
-        elif payload.op_code == OP_SERVER_RESPONSE:
-            print(f"{prefix}   Response: '{reader.read_string()}'")
-        else:
-            print(f"{prefix}   (raw bytes): {reader.read_bytes()}")
-    except Exception as e:
-        print(f"{prefix} Error reading payload: {e}")
 
 
 def main():
@@ -47,9 +31,9 @@ def main():
     server = Server()
 
     @server.on_payload(OP_CLIENT_MSG)
-    def handle_client_message(hdl, payload):
+    def handle_client_message(hdl, message: str, value: uint):
         print("\n--- Server Received Message ---")
-        print_payload("[SERVER]", payload)
+        print(f"[SERVER] Received: message='{message}', value={value}")
         
         # Send a response back
         response = PayloadBuilder(OP_SERVER_RESPONSE).add_param("Hello from server!").build()
@@ -75,9 +59,9 @@ def main():
         print("[CLIENT] Disconnected from server.")
 
     @client.on_payload(OP_SERVER_RESPONSE)
-    def handle_server_response(payload):
+    def handle_server_response(response: str):
         print("\n--- Client Received Response ---")
-        print_payload("[CLIENT]", payload)
+        print(f"[CLIENT] Received: response='{response}'")
         client_received_event.set()
 
     client.connect(f"ws://localhost:{port}")
@@ -92,7 +76,7 @@ def main():
 
     # 5. Client sends a message
     print("\n--- Client Sending Message ---")
-    client_payload = PayloadBuilder(OP_CLIENT_MSG).add_param("Hello from client!").add_param(42).build()
+    client_payload = PayloadBuilder(OP_CLIENT_MSG).add_param("Hello from client!").add_param(uint(42)).build()
     client.send(client_payload)
 
     # 6. Wait for the full exchange to complete
