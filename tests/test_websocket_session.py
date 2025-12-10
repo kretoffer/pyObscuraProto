@@ -45,7 +45,7 @@ def test_websocket_session(crypto_init, capsys):
     server = op.Server()
 
     @server.on_payload(OP_C2S_ECHO)
-    def handle_echo(hdl, payload):
+    def handle_echo(hdl: op.ConnectionHdl, payload: op.Payload):
         print("[SERVER] Echo handler called")
         server_received_payloads[OP_C2S_ECHO] = payload
         # Echo back and also send another message
@@ -54,7 +54,7 @@ def test_websocket_session(crypto_init, capsys):
         server_echo_received.set()
 
     @server.default_payload_handler
-    def default_server_handler(hdl, payload):
+    def default_server_handler(hdl: op.ConnectionHdl, payload: op.Payload):
         print("[SERVER] Default handler called")
         server_received_payloads[payload.op_code] = payload
         # Send a specific response for the unhandled message
@@ -70,18 +70,18 @@ def test_websocket_session(crypto_init, capsys):
         client_ready.set()
 
     @client.on_payload(OP_C2S_ECHO) # Expecting the echo back
-    def client_echo_handler(payload):
+    def client_echo_handler(payload: op.Payload):
         print("[CLIENT] Echo handler called")
         client_received_payloads[OP_C2S_ECHO] = payload
     
     @client.on_payload(OP_S2C_RESPONSE)
-    def client_response_handler(payload):
+    def client_response_handler(payload: op.Payload):
         print("[CLIENT] Response handler called")
         client_received_payloads[OP_S2C_RESPONSE] = payload
         client_response_received.set()
 
     @client.default_payload_handler
-    def default_client_handler(payload):
+    def default_client_handler(payload: op.Payload):
         print("[CLIENT] Default handler called")
         client_received_payloads[payload.op_code] = payload
         client_unhandled_received.set()

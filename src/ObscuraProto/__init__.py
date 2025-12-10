@@ -72,64 +72,79 @@ SUPPORTED_VERSIONS = _bindings.SUPPORTED_VERSIONS
 ConnectionHdl = _bindings.ConnectionHdl
 
 
-def _create_unpacking_handler(handler, is_server_handler=False):
+def _create_unpacking_handler(handler, receives_hdl_from_native=False):
     """
-    Internal helper to create a wrapper function that unpacks a payload
-    based on the handler's type hints.
+    Internal helper to create a wrapper function that intelligently calls a handler
+    by inspecting its type hints. It can pass the connection handle, the raw payload,
+    or auto-unpacked arguments.
     """
     sig = inspect.signature(handler)
-    params = list(sig.parameters.values())
-    
-    # Determine which parameters to unpack based on signature
-    hdl_offset = 1 if is_server_handler else 0
-    params_to_unpack = params[hdl_offset:]
+    params = sig.parameters
 
-    # If there are no params to unpack, or if the first unpackable param is annotated as Payload,
-    # or if there are no annotations at all, then fallback to raw payload handling.
-    if not params_to_unpack or \
-       params_to_unpack[0].annotation is Payload or \
-       all(p.annotation is p.empty for p in params_to_unpack):
-        
-        if is_server_handler:
-            return lambda h, p: handler(h, p)
-        else:
-            return lambda p: handler(p)
+    hdl_param = None
+    payload_param = None
+    unpack_params = []
 
-    # --- Create the unpacking wrapper ---
+    for param in params.values():
+        if param.annotation is ConnectionHdl:
+            hdl_param = param
+        elif param.annotation is Payload:
+            payload_param = param
+        elif param.annotation is not param.empty:
+            unpack_params.append(param)
+
+    # --- Basic validation ---
+    if hdl_param and not receives_hdl_from_native:
+        raise TypeError(f"Handler '{handler.__name__}' is annotated with ConnectionHdl but is registered on a client, which does not receive it.")
+    if payload_param and unpack_params:
+        raise TypeError(f"Handler '{handler.__name__}' cannot mix auto-unpacking parameters and a 'Payload' parameter. Choose one method.")
+
+    # --- Create the specialized wrapper ---
     def unpacking_wrapper(*args):
-        payload = args[-1] # Payload is always the last argument from C++
-        reader = PayloadReader(payload)
+        # Determine what C++ passed us based on the context
+        hdl = args[0] if receives_hdl_from_native else None
+        payload = args[1] if receives_hdl_from_native else args[0]
         
-        type_map = {
-            str: reader.read_string,
-            int: reader.read_int,
-            uint: reader.read_uint,
-            float: reader.read_float, # Use the new universal float reader
-            bool: reader.read_bool,
-            bytes: reader.read_bytes,
-        }
+        handler_kwargs = {}
+
+        if hdl_param:
+            handler_kwargs[hdl_param.name] = hdl
         
-        unpacked_args = []
-        if is_server_handler:
-            unpacked_args.append(args[0]) # Prepend the connection handle
+        if payload_param:
+            handler_kwargs[payload_param.name] = payload
+            # When using raw payload, no further unpacking is done.
+            return handler(**handler_kwargs)
 
-        try:
-            for param in params_to_unpack:
-                type_hint = param.annotation
-                if type_hint in type_map:
-                    unpacked_args.append(type_map[type_hint]())
-                elif type_hint is param.empty:
-                    raise TypeError(f"Missing type hint for parameter '{param.name}'. "
-                                    "Cannot perform automatic payload unpacking.")
-                else:
-                    raise TypeError(f"Unsupported type hint '{type_hint}' for parameter '{param.name}'.")
-        except Exception as e:
-            op_code_hex = f"0x{payload.op_code:04x}" if payload else "N/A"
-            print(f"[ERROR] Failed to auto-unpack payload for OpCode {op_code_hex}. "
-                  f"Check that the handler signature for '{handler.__name__}' matches the payload structure. Details: {e}")
-            return # Suppress further errors
+        # If there are params to unpack, do it.
+        if unpack_params:
+            reader = PayloadReader(payload)
+            type_map = {
+                str: reader.read_string,
+                int: reader.read_int,
+                uint: reader.read_uint,
+                float: reader.read_float,
+                bool: reader.read_bool,
+                bytes: reader.read_bytes,
+            }
 
-        return handler(*unpacked_args)
+            try:
+                for param in unpack_params:
+                    type_hint = param.annotation
+                    if type_hint in type_map:
+                        handler_kwargs[param.name] = type_map[type_hint]()
+                    else:
+                        # This case covers missing or unsupported type hints for unpacking
+                        raise TypeError(f"Unsupported or missing type hint for parameter '{param.name}'.")
+
+            except Exception as e:
+                op_code_hex = f"0x{payload.op_code:04x}" if payload else "N/A"
+                print(f"[ERROR] Failed to auto-unpack payload for OpCode {op_code_hex}. "
+                      f"Check that the handler signature for '{handler.__name__}' matches the payload structure. Details: {e}")
+                return # Suppress further errors
+        
+        # Call the handler with the arguments we've prepared.
+        # This works even if there are no unpack_params (fire-and-forget handlers).
+        return handler(**handler_kwargs)
 
     return unpacking_wrapper
 
@@ -186,7 +201,7 @@ class Server:
                 print(f"Login attempt for '{username}'")
         """
         def decorator(handler):
-            wrapper = _create_unpacking_handler(handler, is_server_handler=True)
+            wrapper = _create_unpacking_handler(handler, receives_hdl_from_native=True)
             self._server.register_op_handler(opcode, wrapper)
             return handler
         return decorator
@@ -195,7 +210,7 @@ class Server:
         """
         Decorator for the default handler, with auto-unpacking based on type hints.
         """
-        wrapper = _create_unpacking_handler(handler, is_server_handler=True)
+        wrapper = _create_unpacking_handler(handler, receives_hdl_from_native=True)
         self._server.set_default_payload_handler(wrapper)
         return handler
 
@@ -255,7 +270,7 @@ class Client:
                 print(f"{author}: {message}")
         """
         def decorator(handler):
-            wrapper = _create_unpacking_handler(handler, is_server_handler=False)
+            wrapper = _create_unpacking_handler(handler, receives_hdl_from_native=False)
             self._client.register_op_handler(opcode, wrapper)
             return handler
         return decorator
@@ -264,7 +279,7 @@ class Client:
         """
         Decorator for the default handler, with auto-unpacking based on type hints.
         """
-        wrapper = _create_unpacking_handler(handler, is_server_handler=False)
+        wrapper = _create_unpacking_handler(handler, receives_hdl_from_native=False)
         self._client.set_default_payload_handler(wrapper)
         return handler
 
