@@ -2,18 +2,15 @@ import sys
 import os
 import pytest
 
-# Add build directory to path to find the compiled module.
-build_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'build'))
-lib_dir = os.path.join(build_dir, 'lib')
-
-sys.path.insert(0, build_dir)
-if os.path.isdir(lib_dir):
-    sys.path.insert(0, lib_dir)
+# Add the src directory to the path to find the ObscuraProto package
+src_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, src_dir)
 
 try:
-    import _obscuraproto as op
-except ImportError:
-    pytest.fail(f"Could not import _obscuraproto. Make sure it's built and check sys.path. Current sys.path includes: '{build_dir}' and '{lib_dir}'", pytrace=False)
+    # We import the high-level package and use the re-exported components
+    from ObscuraProto import PayloadBuilder, PayloadReader
+except ImportError as e:
+    pytest.fail(f"Could not import the ObscuraProto package: {e}. Searched in: {sys.path}", pytrace=False)
 
 
 def test_read_int_uint_and_peek():
@@ -21,7 +18,7 @@ def test_read_int_uint_and_peek():
     Tests reading integers of various sizes using the generic read_int/read_uint
     functions and verifies peek_next_param_size.
     """
-    builder = op.PayloadBuilder(1)
+    builder = PayloadBuilder(1)
 
     # Values that will exercise different integer sizes
     val_i8 = -120
@@ -44,7 +41,7 @@ def test_read_int_uint_and_peek():
     builder.add_param(val_u64)  # Stored as uint64_t (8 bytes)
 
     payload = builder.build()
-    reader = op.PayloadReader(payload)
+    reader = PayloadReader(payload)
 
     # Read and verify in order, checking the size before each read.
     assert reader.peek_next_param_size() == 1
@@ -77,20 +74,20 @@ def test_read_int_uint_and_peek():
 def test_type_interchangeability():
     """Tests reading a signed parameter as unsigned and vice-versa."""
     # Test reading a parameter added as a uint with read_int()
-    builder_i = op.PayloadBuilder(2)
+    builder_i = PayloadBuilder(2)
     builder_i.add_param(255)  # Stored as uint8_t
     payload_i = builder_i.build()
-    reader_i = op.PayloadReader(payload_i)
+    reader_i = PayloadReader(payload_i)
 
     assert reader_i.peek_next_param_size() == 1
     # 255 (unsigned) is -1 in one-byte two's complement representation
     assert reader_i.read_int() == -1
 
     # Test reading a parameter added as an int with read_uint()
-    builder_u = op.PayloadBuilder(3)
+    builder_u = PayloadBuilder(3)
     builder_u.add_param(-1)  # Stored as int8_t
     payload_u = builder_u.build()
-    reader_u = op.PayloadReader(payload_u)
+    reader_u = PayloadReader(payload_u)
 
     assert reader_u.peek_next_param_size() == 1
     # -1 in one-byte two's complement is 255 (unsigned)

@@ -1,79 +1,33 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/operators.h>
+#include <pybind11/functional.h>
+#include <pybind11/chrono.h>
+#include <map>
+
 #include <obscuraproto/crypto.hpp>
 #include <obscuraproto/handshake_messages.hpp>
 #include <obscuraproto/keys.hpp>
 #include <obscuraproto/packet.hpp>
 #include <obscuraproto/session.hpp>
 #include <obscuraproto/version.hpp>
-#include <pybind11/functional.h>
-#include <map>
+#include <obscuraproto/ws_client.hpp>
+#include <obscuraproto/ws_server.hpp>
+
 
 namespace py = pybind11;
 using namespace ObscuraProto;
+using namespace ObscuraProto::net;
 
-class PySessionWrapper {
-public:
-    PySessionWrapper(Role role, KeyPair key_pair) :
-        session(role, std::move(key_pair)) {}
-
-    byte_vector client_initiate_handshake() {
-        return session.client_initiate_handshake().serialize();
-    }
-
-    byte_vector server_respond_to_handshake(const byte_vector& client_hello_data) {
-        auto client_hello = ClientHello::deserialize(client_hello_data);
-        auto server_hello = session.server_respond_to_handshake(client_hello);
-        if (session.is_handshake_complete()) {
-            if (on_handshake_complete) {
-                py::gil_scoped_acquire acquire;
-                on_handshake_complete();
-            }
-        }
-        return server_hello.serialize();
-    }
-
-    void client_finalize_handshake(const byte_vector& server_hello_data) {
-        auto server_hello = ServerHello::deserialize(server_hello_data);
-        session.client_finalize_handshake(server_hello);
-        if (session.is_handshake_complete()) {
-            if (on_handshake_complete) {
-                py::gil_scoped_acquire acquire;
-                on_handshake_complete();
-            }
-        }
-    }
-
-    byte_vector encrypt_payload(const Payload& payload) {
-        return session.encrypt_payload(payload);
-    }
-
-    Payload decrypt_packet(const byte_vector& packet) {
-        auto payload = session.decrypt_packet(packet);
-        return payload;
-    }
-
-    bool is_handshake_complete() const {
-        return session.is_handshake_complete();
-    }
-
-    py::object get_selected_version() const {
-        auto version = session.get_selected_version();
-        if (version.has_value()) {
-            return py::cast(version.value());
-        }
-        return py::none();
-    }
-
-    void set_on_handshake_complete(py::function callback) {
-        on_handshake_complete = std::move(callback);
-    }
-
-private:
-    ObscuraProto::Session session;
-    py::function on_handshake_complete;
+// Per https://github.com/pybind/pybind11/issues/1803
+// PYBIND11_DECLARE_HOLDER_TYPE causes an error with an undefined
+// variable if it's used with a templated type. websocketpp::connection_hdl
+// is a using declaration for a std::weak_ptr. To bind it, we need to
+// "trick" C++ into believing that it's a real type.
+struct WsConnectionHdlWrapper {
+    WsConnectionHdl hdl;
 };
+
 
 PYBIND11_MODULE(_obscuraproto, m) {
     m.doc() = "Python bindings for the ObscuraProto C++ library";
@@ -208,14 +162,47 @@ PYBIND11_MODULE(_obscuraproto, m) {
         .value("SERVER", Role::SERVER)
         .export_values();
 
-    py::class_<PySessionWrapper>(m, "Session")
-        .def(py::init<Role, KeyPair>())
-        .def("client_initiate_handshake", &PySessionWrapper::client_initiate_handshake)
-        .def("server_respond_to_handshake", &PySessionWrapper::server_respond_to_handshake)
-        .def("client_finalize_handshake", &PySessionWrapper::client_finalize_handshake)
-        .def("encrypt_payload", &PySessionWrapper::encrypt_payload)
-        .def("decrypt_packet", &PySessionWrapper::decrypt_packet)
-        .def("is_handshake_complete", &PySessionWrapper::is_handshake_complete)
-        .def("get_selected_version", &PySessionWrapper::get_selected_version)
-        .def("set_on_handshake_complete", &PySessionWrapper::set_on_handshake_complete, "Sets the callback for when the handshake is complete.");
+    // WS Connection Handle
+    py::class_<WsConnectionHdlWrapper>(m, "ConnectionHdl")
+        .def(py::init<>())
+        .def("__repr__", [](const WsConnectionHdlWrapper &self) {
+            return "<obscuraproto.ConnectionHdl>";
+        });
+
+    // WS Server
+    py::class_<WsServerWrapper>(m, "WsServer")
+        .def(py::init<KeyPair>())
+        .def("run", &WsServerWrapper::run, py::call_guard<py::gil_scoped_release>(),
+             "Runs the server in a background thread.")
+        .def("stop", &WsServerWrapper::stop, py::call_guard<py::gil_scoped_release>(),
+             "Stops the server thread.")
+        .def("send", [](WsServerWrapper &self, WsConnectionHdlWrapper hdl, const Payload &payload) {
+            self.send(hdl.hdl, payload);
+        }, py::call_guard<py::gil_scoped_release>(), "Send a payload to a specific client.")
+        .def("register_op_handler", [](WsServerWrapper &self, Payload::OpCode op_code, 
+                                       std::function<void(WsConnectionHdlWrapper, Payload)> callback) {
+            self.register_op_handler(op_code, [callback](WsConnectionHdl hdl, Payload payload) {
+                callback(WsConnectionHdlWrapper{hdl}, payload);
+            });
+        }, "Register a handler for a specific opcode.")
+        .def("set_default_payload_handler", [](WsServerWrapper &self,
+                                                std::function<void(WsConnectionHdlWrapper, Payload)> callback) {
+            self.set_default_payload_handler([callback](WsConnectionHdl hdl, Payload payload) {
+                callback(WsConnectionHdlWrapper{hdl}, payload);
+            });
+        }, "Sets the default handler for unhandled opcodes.");
+
+    // WS Client
+    py::class_<WsClientWrapper>(m, "WsClient")
+        .def(py::init<KeyPair>())
+        .def("connect", &WsClientWrapper::connect, py::call_guard<py::gil_scoped_release>(),
+             "Connects to the server and performs handshake.")
+        .def("disconnect", &WsClientWrapper::disconnect, py::call_guard<py::gil_scoped_release>(),
+             "Disconnects from the server.")
+        .def("send", &WsClientWrapper::send, py::call_guard<py::gil_scoped_release>(),
+             "Sends a payload to the server.")
+        .def("set_on_ready_callback", &WsClientWrapper::set_on_ready_callback)
+        .def("set_on_disconnect_callback", &WsClientWrapper::set_on_disconnect_callback)
+        .def("register_op_handler", &WsClientWrapper::register_op_handler)
+        .def("set_default_payload_handler", &WsClientWrapper::set_default_payload_handler);
 }

@@ -15,15 +15,27 @@ except ImportError:
     # Assumes the project root is two levels up from this file's directory.
     proj_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
     build_dir = os.path.join(proj_root, 'build')
-    lib_dir = os.path.join(build_dir, 'lib')
     
-    if os.path.isdir(lib_dir):
-         sys.path.insert(0, lib_dir)
-    elif os.path.isdir(build_dir):
+    # The compiled library is directly in the build directory now
+    if os.path.isdir(build_dir):
         sys.path.insert(0, build_dir)
 
     try:
-        import _obscuraproto as _bindings
+        # The module name includes version and platform info, so we search for it.
+        if os.path.isdir(build_dir):
+            for f in os.listdir(build_dir):
+                if f.startswith("_obscuraproto") and f.endswith(".so"):
+                    import importlib.util
+                    spec = importlib.util.spec_from_file_location("_obscuraproto", os.path.join(build_dir, f))
+                    _bindings = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(_bindings)
+                    sys.modules['_obscuraproto'] = _bindings
+                    break
+            else:
+                raise ImportError("Could not find the _obscuraproto.*.so module in the build directory.")
+        else:
+             raise ImportError("Build directory not found.")
+             
     except ImportError as e:
         raise ImportError(
             "Could not import the compiled ObscuraProto C++ bindings (_obscuraproto). "
@@ -43,187 +55,79 @@ PublicKey = _bindings.PublicKey
 PrivateKey = _bindings.PrivateKey
 V1_0 = _bindings.V1_0
 SUPPORTED_VERSIONS = _bindings.SUPPORTED_VERSIONS
-
-
-"""
-ObscuraProto high-level Python library.
-"""
-import asyncio
-import inspect
-
-try:
-    # This is the C++ extension module built by CMake.
-    from . import _obscuraproto as _bindings
-except ImportError:
-    # If the extension is not in the same directory, it might be in the build/lib directory.
-    # This is a fallback for development environments. For a real installation,
-    # the package structure would handle this.
-    import sys
-    import os
-    
-    # Heuristic to find the build directory.
-    # Assumes the project root is two levels up from this file's directory.
-    proj_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-    build_dir = os.path.join(proj_root, 'build')
-    lib_dir = os.path.join(build_dir, 'lib')
-    
-    if os.path.isdir(lib_dir):
-         sys.path.insert(0, lib_dir)
-    elif os.path.isdir(build_dir):
-        sys.path.insert(0, build_dir)
-
-    try:
-        import _obscuraproto as _bindings
-    except ImportError as e:
-        raise ImportError(
-            "Could not import the compiled ObscuraProto C++ bindings (_obscuraproto). "
-            "Please make sure the project is built. "
-            f"Original error: {e}"
-        )
-
-
-# --- Re-export low-level components ---
-Role = _bindings.Role
-Crypto = _bindings.Crypto
-Payload = _bindings.Payload
-PayloadBuilder = _bindings.PayloadBuilder
-PayloadReader = _bindings.PayloadReader
-KeyPair = _bindings.KeyPair
-PublicKey = _bindings.PublicKey
-PrivateKey = _bindings.PrivateKey
-V1_0 = _bindings.V1_0
-SUPPORTED_VERSIONS = _bindings.SUPPORTED_VERSIONS
+ConnectionHdl = _bindings.ConnectionHdl
 
 
 # --- High-level wrapper classes ---
 
-class _BasePeer:
+class Server:
     """
-    An internal base class for Client and Server peers, providing common functionality.
-    """
-    def __init__(self, session):
-        if not isinstance(session, _bindings.Session):
-            raise TypeError("session must be a _bindings.Session object")
-        self._session = session
-        self.peer = None
-        self._op_handlers = {}
-        self._default_payload_handler = None
-        self._incoming_queue = asyncio.Queue()
-        self._processing_task = asyncio.create_task(self._process_incoming())
-
-    async def _process_incoming(self):
-        """A background task that processes the incoming message queue."""
-        try:
-            while True:
-                packet = await self._incoming_queue.get()
-                try:
-                    payload = self._session.decrypt_packet(packet)
-                    handler = self._op_handlers.get(payload.op_code)
-
-                    if handler:
-                        if inspect.iscoroutinefunction(handler):
-                            asyncio.create_task(handler(payload))
-                        else:
-                            handler(payload)
-                    elif self._default_payload_handler:
-                        if inspect.iscoroutinefunction(self._default_payload_handler):
-                            asyncio.create_task(self._default_payload_handler(payload))
-                        else:
-                            self._default_payload_handler(payload)
-
-                except Exception as e:
-                    print(f"[SYSTEM] Error processing packet: {e}")
-                finally:
-                    self._incoming_queue.task_done()
-        except asyncio.CancelledError:
-            # Task was cancelled, which is the signal to stop.
-            pass
-
-    def close(self):
-        """Cancels the background processing task."""
-        self._processing_task.cancel()
-
-    def register_op_handler(self, opcode, handler):
-        """Registers a handler for a specific opcode."""
-        self._op_handlers[opcode] = handler
-
-    def handle_op_code(self, opcode):
-        """
-        A decorator to register a handler for a specific opcode.
-
-        Example:
-            server = Server()
-            @server.handle_op_code(0x5000)
-            async def my_handler(payload):
-                print(f"Handling payload for op {payload.op_code}")
-
-        Args:
-            opcode (int): The operation code to handle.
-        """
-        def decorator(handler):
-            """The actual decorator that registers the function."""
-            self.register_op_handler(opcode, handler)
-            return handler
-        return decorator
-
-    def set_default_payload_handler(self, handler):
-        """Sets the default handler for unhandled opcodes."""
-        self._default_payload_handler = handler
-
-    def default_handler(self, handler):
-        """
-        A decorator to register a function as the default handler for unhandled opcodes.
-
-        Example:
-            @server.default_handler
-            async def my_default_handler(payload):
-                print("Received an unhandled payload")
-        """
-        self.set_default_payload_handler(handler)
-        return handler
-
-    def _receive_encrypted(self, packet):
-        """Internal method to queue an encrypted packet for processing."""
-        self._incoming_queue.put_nowait(packet)
+    An ObscuraProto WebSocket server.
     
-    async def send(self, payload):
-        """
-        Encrypts and sends a payload to the connected peer.
-        
-        Raises:
-            RuntimeError: If the handshake is not complete or the peer is not connected.
-        """
-        if not self._session.is_handshake_complete():
-            raise RuntimeError("Handshake must be complete before sending data.")
-        if not self.peer:
-            raise RuntimeError("Peer is not connected.")
-            
-        encrypted_packet = self._session.encrypt_payload(payload)
-        self.peer._receive_encrypted(encrypted_packet)
-        # Yield control to simulate non-blocking network I/O
-        await asyncio.sleep(0)
-
-
-class Server(_BasePeer):
-    """
-    Represents a Server peer in a simulated ObscuraProto connection.
-    It holds its own long-term keys and session.
+    This class wraps the C++ WsServer to provide a Pythonic interface with
+    decorators for handling events.
     """
     def __init__(self):
-        long_term_key = _bindings.Crypto.generate_sign_keypair()
-        session = _bindings.Session(_bindings.Role.SERVER, long_term_key)
-        super().__init__(session)
-        self._long_term_key = long_term_key
+        """Initializes the server, generating its long-term signing key."""
+        self._long_term_key = _bindings.Crypto.generate_sign_keypair()
+        self._server = _bindings.WsServer(self._long_term_key)
 
     @property
     def public_key(self):
         """The server's long-term public key, needed by clients to connect."""
         return self._long_term_key.public_key
 
+    def start(self, port):
+        """
+        Starts the WebSocket server on the given port.
+        This runs the server in a background thread.
+        """
+        print(f"[PY-SERVER] Starting on port {port}...")
+        self._server.run(port)
+        print(f"[PY-SERVER] Started.")
 
-class Client(_BasePeer):
+    def stop(self):
+        """Stops the server."""
+        print("[PY-SERVER] Stopping...")
+        self._server.stop()
+        print("[PY-SERVER] Stopped.")
+
+    def send(self, hdl, payload):
+        """Sends a payload to a specific client."""
+        self._server.send(hdl, payload)
+
+    def on_payload(self, opcode):
+        """
+        Decorator to register a handler for a specific opcode.
+        
+        The decorated function will be called with the connection handle and the payload.
+        
+        Example:
+            server = Server()
+            @server.on_payload(0x1001)
+            def handle_login(hdl, payload):
+                print("Received login payload")
+        """
+        def decorator(handler):
+            # The C++ layer expects a function with a specific signature.
+            # We register a lambda that calls the user's decorated function.
+            self._server.register_op_handler(opcode, lambda h, p: handler(h, p))
+            return handler
+        return decorator
+
+    def default_payload_handler(self, handler):
+        """
+        Decorator to register a default handler for unhandled opcodes.
+        """
+        self._server.set_default_payload_handler(lambda h, p: handler(h, p))
+        return handler
+
+
+class Client:
     """
-    Represents a Client peer in a simulated ObscuraProto connection.
+    An ObscuraProto WebSocket client.
+
+    Wraps the C++ WsClient for a Pythonic interface with decorators.
     """
     def __init__(self, server_public_key):
         """
@@ -235,48 +139,49 @@ class Client(_BasePeer):
             
         key_view = _bindings.KeyPair()
         key_view.public_key = server_public_key
-        session = _bindings.Session(_bindings.Role.CLIENT, key_view)
-        super().__init__(session)
-        self._on_ready_callback = None
+        self._client = _bindings.WsClient(key_view)
 
-    def set_on_ready_callback(self, callback):
-        """
-        Sets a callback to be fired when the handshake is successfully completed.
-        The callback can be a regular function or a coroutine.
-        """
-        self._on_ready_callback = callback
+    def connect(self, uri):
+        """Connects to the server at the given WebSocket URI (e.g., "ws://localhost:9002")."""
+        print(f"[PY-CLIENT] Connecting to {uri}...")
+        self._client.connect(uri)
 
-    async def connect(self, server_peer):
-        """
-        Connects to a server peer and performs the handshake under the hood.
+    def disconnect(self):
+        """Disconnects from the server."""
+        self._client.disconnect()
 
-        Args:
-            server_peer (Server): The server instance to connect to.
-        """
-        if not isinstance(server_peer, Server):
-            raise TypeError("server_peer must be a Server object.")
+    def send(self, payload):
+        """Sends a payload to the server."""
+        self._client.send(payload)
 
-        print("[SYSTEM] Initiating connection and performing handshake...")
-        self.peer = server_peer
-        server_peer.peer = self
+    def on_ready(self, handler):
+        """Decorator to register a callback for when the client is connected and ready."""
+        self._client.set_on_ready_callback(handler)
+        return handler
+
+    def on_disconnect(self, handler):
+        """Decorator to register a callback for when the client disconnects."""
+        self._client.set_on_disconnect_callback(handler)
+        return handler
+
+    def on_payload(self, opcode):
+        """
+        Decorator to register a handler for a specific opcode from the server.
         
-        # Perform the 3-step handshake, simulating network latency
-        client_hello = self._session.client_initiate_handshake()
-        await asyncio.sleep(0)
-        
-        server_hello = server_peer._session.server_respond_to_handshake(client_hello)
-        await asyncio.sleep(0)
+        Example:
+            @client.on_payload(0x2001)
+            def handle_chat_message(payload):
+                ...
+        """
+        def decorator(handler):
+            self._client.register_op_handler(opcode, lambda p: handler(p))
+            return handler
+        return decorator
 
-        self._session.client_finalize_handshake(server_hello)
-        await asyncio.sleep(0)
-        
-        if self._session.is_handshake_complete():
-            print("[SYSTEM] Handshake complete.")
-            if self._on_ready_callback:
-                if inspect.iscoroutinefunction(self._on_ready_callback):
-                    await self._on_ready_callback()
-                else:
-                    self._on_ready_callback()
-        else:
-            print("[SYSTEM] Handshake failed.")
+    def default_payload_handler(self, handler):
+        """
+        Decorator to register a default handler for unhandled server opcodes.
+        """
+        self._client.set_default_payload_handler(lambda p: handler(p))
+        return handler
 
