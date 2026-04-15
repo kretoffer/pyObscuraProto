@@ -6,6 +6,7 @@ from ObscuraProto import (
     Client,
     PayloadBuilder,
     uint, # Import the new marker type
+    ConnectionHdl, # Import ConnectionHdl
 )
 
 # --- Opcodes ---
@@ -31,7 +32,7 @@ def main():
     server = Server()
 
     @server.on_payload(OP_CLIENT_MSG)
-    def handle_client_message(hdl, message: str, value: uint):
+    def handle_client_message(hdl: ConnectionHdl, message: str, value: uint):
         print("\n--- Server Received Message ---")
         print(f"[SERVER] Received: message='{message}', value={value}")
         
