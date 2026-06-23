@@ -76,6 +76,96 @@ PrivateKey = _bindings.PrivateKey
 V1_0 = _bindings.V1_0
 SUPPORTED_VERSIONS = _bindings.SUPPORTED_VERSIONS
 ConnectionHdl = _bindings.ConnectionHdl
+CppStream = _bindings.CppStream
+
+
+class Stream:
+    """A bidirectional, multiplexed data stream over an encrypted WebSocket.
+
+    Wraps the C++ ``CppStream`` to provide Pythonic decorator-based registration
+    of data/end/cancel handlers and async-friendly I/O.
+
+    You don't create Stream directly — obtain one via ``server.start_stream(hdl)``,
+    ``client.start_stream()``, or an ``@on_incoming_stream`` decorated handler.
+    """
+
+    def __init__(self, cpp_stream):
+        self._s = cpp_stream
+
+    @property
+    def stream_id(self) -> int:
+        """Unique stream identifier."""
+        return self._s.get_stream_id()
+
+    # --- Synchronous I/O (use inside C++ callbacks) ---
+
+    def write(self, data: bytes):
+        """Send a data chunk over the stream (thread-safe, releases GIL)."""
+        self._s.write(data)
+
+    def end(self):
+        """Signal end of outgoing data (half-close, releases GIL)."""
+        self._s.end()
+
+    def cancel(self):
+        """Abort the stream immediately (releases GIL)."""
+        self._s.cancel()
+
+    # --- Async I/O (use inside async code) ---
+
+    async def async_write(self, data: bytes):
+        """Send a data chunk without blocking the event loop."""
+        await asyncio.to_thread(self._s.write, data)
+
+    async def async_end(self):
+        """Signal end of outgoing data without blocking the event loop."""
+        await asyncio.to_thread(self._s.end)
+
+    async def async_cancel(self):
+        """Abort the stream without blocking the event loop."""
+        await asyncio.to_thread(self._s.cancel)
+
+    # --- Decorator-style handler registration ---
+
+    def on_data(self, handler):
+        """Register a callback for incoming data chunks.
+
+        Can be used as a decorator::
+
+            @stream.on_data
+            def on_chunk(data: bytes):
+                print(f"Got {len(data)} bytes")
+        """
+
+        def wrapper(data_list):
+            handler(bytes(data_list))
+
+        self._s.set_data_handler(wrapper)
+        return handler
+
+    def on_end(self, handler):
+        """Register a callback for when the remote side finishes writing.
+
+        Can be used as a decorator::
+
+            @stream.on_end
+            def on_end():
+                stream.end()  # echo the half-close
+        """
+        self._s.set_end_handler(handler)
+        return handler
+
+    def on_cancel(self, handler):
+        """Register a callback for when the remote side cancels the stream.
+
+        Can be used as a decorator::
+
+            @stream.on_cancel
+            def on_cancel():
+                print("Stream was cancelled")
+        """
+        self._s.set_cancel_handler(handler)
+        return handler
 
 
 def _create_unpacking_handler(handler, receives_hdl_from_native=False):
@@ -291,6 +381,41 @@ class Server:
         """Sends a request to a specific client and returns a future for the response."""
         return await asyncio.to_thread(self._server.sync_request, hdl, payload)
 
+    def start_stream(self, hdl):
+        """Starts a new outgoing stream to a specific client.
+
+        Returns a :class:`Stream` that can be used to write data.
+
+        Example:
+            stream = server.start_stream(hdl)
+            stream.write(b"hello")
+            stream.end()
+        """
+        return Stream(self._server.start_stream(hdl))
+
+    async def async_start_stream(self, hdl):
+        """Async version of :meth:`start_stream` — does not block the event loop."""
+        cpp_stream = await asyncio.to_thread(self._server.start_stream, hdl)
+        return Stream(cpp_stream)
+
+    def on_incoming_stream(self, handler):
+        """Decorator to register a handler for incoming streams from clients.
+
+        The decorated function receives a :class:`Stream`::
+
+            @server.on_incoming_stream
+            def handle_stream(stream: Stream):
+                @stream.on_data
+                def on_data(data: bytes):
+                    print(f"Received: {data}")
+        """
+
+        def wrapper(cpp_stream):
+            handler(Stream(cpp_stream))
+
+        self._server.register_incoming_stream_handler(wrapper)
+        return handler
+
     def on_payload(self, opcode):
         """
         Decorator to register a handler for a specific opcode.
@@ -378,6 +503,41 @@ class Client:
     async def async_request(self, payload) -> Payload:
         """Sends a request to the server and returns a future for the response."""
         return await asyncio.to_thread(self._client.sync_request, payload)
+
+    def start_stream(self):
+        """Starts a new outgoing stream to the server.
+
+        Returns a :class:`Stream` that can be used to write data.
+
+        Example:
+            stream = client.start_stream()
+            stream.write(b"hello")
+            stream.end()
+        """
+        return Stream(self._client.start_stream())
+
+    async def async_start_stream(self):
+        """Async version of :meth:`start_stream` — does not block the event loop."""
+        cpp_stream = await asyncio.to_thread(self._client.start_stream)
+        return Stream(cpp_stream)
+
+    def on_incoming_stream(self, handler):
+        """Decorator to register a handler for incoming streams from the server.
+
+        The decorated function receives a :class:`Stream`::
+
+            @client.on_incoming_stream
+            def handle_stream(stream: Stream):
+                @stream.on_data
+                def on_data(data: bytes):
+                    print(f"Received: {data}")
+        """
+
+        def wrapper(cpp_stream):
+            handler(Stream(cpp_stream))
+
+        self._client.register_incoming_stream_handler(wrapper)
+        return handler
 
     def on_ready(self, handler):
         """Decorator to register a callback for when the client is connected and ready."""

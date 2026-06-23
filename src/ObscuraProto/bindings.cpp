@@ -9,6 +9,7 @@
 #include <obscuraproto/handshake_messages.hpp>
 #include <obscuraproto/keys.hpp>
 #include <obscuraproto/packet.hpp>
+#include <obscuraproto/stream.hpp>
 #include <obscuraproto/session.hpp>
 #include <obscuraproto/version.hpp>
 #include <obscuraproto/ws_client.hpp>
@@ -165,6 +166,29 @@ PYBIND11_MODULE(_obscuraproto, m) {
             }
         }, "Reads a float or double, determining its size from the packet and returning it as a double.");
     
+    // Stream
+    py::class_<Stream, std::shared_ptr<Stream>>(m, "CppStream")
+        .def(py::init<uint32_t, std::function<void(Payload)>>(),
+             "Constructor (stream_id, send_fn) - for testing. Use start_stream() in production.")
+        .def("get_stream_id", &Stream::get_stream_id,
+             "Returns the stream's unique ID.")
+        .def("write", [](Stream &self, const std::string &data) {
+            byte_vector vec(reinterpret_cast<const uint8_t*>(data.data()),
+                            reinterpret_cast<const uint8_t*>(data.data() + data.size()));
+            self.write(vec);
+        }, py::call_guard<py::gil_scoped_release>(),
+             "Send a data chunk over the stream.")
+        .def("end", &Stream::end, py::call_guard<py::gil_scoped_release>(),
+             "Signal end of outgoing data (half-close).")
+        .def("cancel", &Stream::cancel, py::call_guard<py::gil_scoped_release>(),
+             "Abort the stream immediately.")
+        .def("set_data_handler", &Stream::set_data_handler,
+             "Register callback for incoming data chunks.")
+        .def("set_end_handler", &Stream::set_end_handler,
+             "Register callback for remote end-of-stream.")
+        .def("set_cancel_handler", &Stream::set_cancel_handler,
+             "Register callback for remote stream cancel.");
+
     // Session
     py::enum_<Role>(m, "Role")
         .value("CLIENT", Role::CLIENT)
@@ -208,7 +232,15 @@ PYBIND11_MODULE(_obscuraproto, m) {
             self.set_default_payload_handler([callback](WsConnectionHdl hdl, Payload payload) {
                 callback(WsConnectionHdlWrapper{hdl}, payload);
             });
-        }, "Sets the default handler for unhandled opcodes.");
+        }, "Sets the default handler for unhandled opcodes.")
+        .def("start_stream", [](WsServerWrapper &self, WsConnectionHdlWrapper hdl) {
+            return self.start_stream(hdl.hdl);
+        }, py::call_guard<py::gil_scoped_release>(),
+             "Start a new outgoing stream to a specific client.")
+        .def("register_incoming_stream_handler", [](WsServerWrapper &self,
+            std::function<void(std::shared_ptr<Stream>)> callback) {
+            self.register_incoming_stream_handler(std::move(callback));
+        }, "Register a handler for incoming streams from clients.");
 
     // WS Client
     py::class_<WsClientWrapper>(m, "WsClient")
@@ -226,5 +258,9 @@ PYBIND11_MODULE(_obscuraproto, m) {
         .def("set_on_disconnect_callback", &WsClientWrapper::set_on_disconnect_callback)
         .def("register_op_handler", &WsClientWrapper::register_op_handler)
         .def("register_request_handler", &WsClientWrapper::register_request_handler, "Register a request handler for a specific opcode, expecting a Payload response.")
-        .def("set_default_payload_handler", &WsClientWrapper::set_default_payload_handler);
+        .def("set_default_payload_handler", &WsClientWrapper::set_default_payload_handler)
+        .def("start_stream", &WsClientWrapper::start_stream, py::call_guard<py::gil_scoped_release>(),
+             "Start a new outgoing stream to the server.")
+        .def("register_incoming_stream_handler", &WsClientWrapper::register_incoming_stream_handler,
+             "Register a handler for incoming streams from the server.");
 }

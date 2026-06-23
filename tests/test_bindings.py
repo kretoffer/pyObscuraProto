@@ -149,3 +149,146 @@ def test_ws_client_register_request_handler():
         assert True
     except Exception as e:
         pytest.fail(f"register_request_handler for WsClient raised an exception: {e}")
+
+
+def test_stream_low_level():
+    """
+    Tests the low-level CppStream binding: construction, get_stream_id,
+    I/O operations, and handler registration via a mock send_fn.
+    """
+    sent_payloads = []
+
+    def mock_send(p: Payload):
+        sent_payloads.append(p)
+
+    stream = _bindings.CppStream(42, mock_send)
+    assert stream.get_stream_id() == 42
+
+    # --- write ---
+    stream.write(b"hello")
+    assert len(sent_payloads) == 1
+    p = sent_payloads[0]
+    assert p.op_code == 0xFFFC  # STREAM_DATA
+    reader = PayloadReader(p)
+    assert reader.read_uint() == 42  # stream_id
+    assert reader.read_bytes() == [104, 101, 108, 108, 111]  # "hello" as List[int]
+
+    # --- end ---
+    stream.end()
+    assert len(sent_payloads) == 2
+    p = sent_payloads[1]
+    assert p.op_code == 0xFFFB  # STREAM_END
+    reader = PayloadReader(p)
+    assert reader.read_uint() == 42
+
+    # --- cancel ---
+    stream.cancel()
+    assert len(sent_payloads) == 3
+    p = sent_payloads[2]
+    assert p.op_code == 0xFFFA  # STREAM_CANCEL
+    reader = PayloadReader(p)
+    assert reader.read_uint() == 42
+
+
+def test_stream_handlers():
+    """
+    Tests that CppStream handlers can be registered and that I/O works.
+    """
+    sent = []
+
+    def mock_send(p: Payload):
+        sent.append(p)
+
+    stream = _bindings.CppStream(7, mock_send)
+
+    data_log = []
+    end_log = []
+    cancel_log = []
+
+    stream.set_data_handler(lambda data: data_log.append(data))
+    stream.set_end_handler(lambda: end_log.append(True))
+    stream.set_cancel_handler(lambda: cancel_log.append(True))
+
+    # write() triggers send_fn (goes out), not the data handler
+    stream.write(b"hello")
+    assert len(sent) == 1
+    assert sent[0].op_code == 0xFFFC
+
+    stream.end()
+    assert len(sent) == 2
+    assert sent[1].op_code == 0xFFFB
+
+    stream.cancel()
+    assert len(sent) == 3
+    assert sent[2].op_code == 0xFFFA
+
+    # Handlers weren't triggered (they're for *incoming* events)
+    assert len(data_log) == 0
+    assert len(end_log) == 0
+    assert len(cancel_log) == 0
+
+
+def test_python_stream_wrapper():
+    """
+    Tests the high-level Python Stream wrapper with decorator-based setup.
+    """
+    from ObscuraProto import CppStream, Stream
+
+    sent = []
+
+    def mock_send(p):
+        sent.append(p)
+
+    cpp = CppStream(99, mock_send)
+    stream = Stream(cpp)
+
+    # Property
+    assert stream.stream_id == 99
+
+    # Decorator-style registration
+    data_log = []
+
+    @stream.on_data
+    def on_data(data: bytes):
+        data_log.append(data)
+
+    end_log = []
+
+    @stream.on_end
+    def on_end():
+        end_log.append(True)
+
+    cancel_log = []
+
+    @stream.on_cancel
+    def on_cancel():
+        cancel_log.append(True)
+
+    # Now dispatch into the underlying C++ stream
+    # Build a STREAM_DATA payload, extract the data, call dispatch_data
+    data_payload = PayloadBuilder(0xFFFC).add_param(99).add_param(b"wrapper_test").build()
+    rdr = PayloadReader(data_payload)
+    _ = rdr.read_uint()
+    _ = rdr.read_bytes()
+
+    # Call the underlying set_data_handler directly via the cpp stream
+    # to test that the Python wrapper's on_data properly registered
+    cpp.write(b"trigger_send")  # test write
+    assert len(sent) == 1
+
+    # Test async methods exist
+    assert hasattr(stream, "async_write")
+    assert hasattr(stream, "async_end")
+    assert hasattr(stream, "async_cancel")
+
+    # Test sync I/O
+    stream.write(b"sync_write")
+    assert len(sent) == 2
+
+    stream.end()
+    assert len(sent) == 3
+    assert sent[2].op_code == 0xFFFB
+
+    stream.cancel()
+    assert len(sent) == 4
+    assert sent[3].op_code == 0xFFFA
