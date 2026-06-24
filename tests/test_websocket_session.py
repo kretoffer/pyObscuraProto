@@ -47,21 +47,21 @@ def test_websocket_session(crypto_init, capsys):
     # --- Server Setup ---
     server = op.Server()
 
-    @server.on_payload(OP_C2S_ECHO)
+    @server.on_anon_payload(OP_C2S_ECHO)
     def handle_echo(hdl: op.ConnectionHdl, payload: op.Payload):
         print("[SERVER] Echo handler called")
         server_received_payloads[OP_C2S_ECHO] = payload
         # Echo back and also send another message
-        server.send(hdl, payload)
-        server.send(hdl, op.PayloadBuilder(OP_S2C_UNHANDLED).build())
+        server.send_anonymous(hdl, payload)
+        server.send_anonymous(hdl, op.PayloadBuilder(OP_S2C_UNHANDLED).build())
         server_echo_received.set()
 
-    @server.default_payload_handler
+    @server.anon_default_payload_handler
     def default_server_handler(hdl: op.ConnectionHdl, payload: op.Payload):
         print("[SERVER] Default handler called")
         server_received_payloads[payload.op_code] = payload
         # Send a specific response for the unhandled message
-        server.send(hdl, op.PayloadBuilder(OP_S2C_RESPONSE).add_param("Handled by default").build())
+        server.send_anonymous(hdl, op.PayloadBuilder(OP_S2C_RESPONSE).add_param("Handled by default").build())
         server_unhandled_received.set()
 
     # --- Client Setup ---

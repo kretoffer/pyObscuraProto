@@ -43,7 +43,7 @@ def test_auto_unpacking(crypto_init, capsys):
     server = op.Server()
 
     # 1. Test handler with auto-unpacking
-    @server.on_payload(OP_UNPACK_TEST)
+    @server.on_anon_payload(OP_UNPACK_TEST)
     def handle_unpack(hdl: op.ConnectionHdl, name: str, value: op.uint, flag: bool, pi: float):
         print(f"[SERVER] Unpacking handler called with: {name}, {value}, {flag}, {pi}")
         received_data["unpacked"] = (name, value, flag, pi)
@@ -51,10 +51,10 @@ def test_auto_unpacking(crypto_init, capsys):
         response_payload = (
             op.PayloadBuilder(OP_RESPONSE).add_param(name).add_param(value).add_param(flag).add_param(pi).build()
         )
-        server.send(hdl, response_payload)
+        server.send_anonymous(hdl, response_payload)
 
     # 2. Test handler with raw payload (fallback)
-    @server.on_payload(OP_RAW_TEST)
+    @server.on_anon_payload(OP_RAW_TEST)
     def handle_raw(hdl: op.ConnectionHdl, payload: op.Payload):
         print("[SERVER] Raw handler called")
         reader = op.PayloadReader(payload)

@@ -467,6 +467,106 @@ class Server:
 
         return decorator
 
+    # --- Anonymous Sessions ---
+
+    def send_anonymous(self, hdl, payload):
+        """Sends a payload to an anonymous session."""
+        self._server.send_anonymous(hdl, payload)
+
+    def on_anon_payload(self, opcode):
+        """
+        Decorator to register a handler for a specific opcode on anonymous sessions.
+
+        The decorated function will be called with arguments unpacked from the
+        payload based on type hints. If no type hints are provided, it will be
+        called with `(hdl, payload)`.
+
+        Example:
+            @server.on_anon_payload(0x5001)
+            def handle_anon_register(hdl, key_data: bytes):
+                print(f"Anonymous client wants to register")
+        """
+
+        def decorator(handler):
+            wrapper = _create_unpacking_handler(handler, receives_hdl_from_native=True)
+            self._server.register_anon_op_handler(opcode, wrapper)
+            return handler
+
+        return decorator
+
+    def anon_default_payload_handler(self, handler):
+        """
+        Decorator for the default handler for anonymous sessions,
+        with auto-unpacking based on type hints.
+        """
+        wrapper = _create_unpacking_handler(handler, receives_hdl_from_native=True)
+        self._server.set_anon_default_payload_handler(wrapper)
+        return handler
+
+    def on_anon_request(self, opcode):
+        """
+        Registers a request handler for anonymous sessions.
+
+        The decorated function will be called with ConnectionHdl and arguments
+        unpacked from the payload reader based on type hints.
+        The handler must return a Payload object as a response.
+
+        Example:
+            @server.on_anon_request(0x5002)
+            def handle_anon_auth(hdl: ConnectionHdl, token: str) -> Payload:
+                return PayloadBuilder(0x5003).add_param(True).build()
+        """
+
+        def decorator(handler):
+            wrapper = _create_request_unpacking_handler(handler, receives_hdl_from_native=True)
+            self._server.register_anon_request_handler(opcode, wrapper)
+            return handler
+
+        return decorator
+
+    # --- Client Identity ---
+
+    def set_client_identity_handler(self, handler):
+        """
+        Sets a handler that is called when a client authenticates with an identity key.
+        The handler receives (hdl, public_key) and should return True to accept
+        or False to reject the connection.
+
+        Can be used as a decorator::
+
+            @server.on_client_identity
+            def check_identity(hdl, public_key):
+                return public_key.data == allowed_key.data
+        """
+
+        def wrapper(hdl, pk):
+            return handler(hdl, pk)
+
+        self._server.set_client_identity_handler(wrapper)
+
+    def on_client_identity(self, handler):
+        """
+        Decorator to register a handler for client identity verification.
+        """
+        self.set_client_identity_handler(handler)
+        return handler
+
+    def get_client_identity(self, hdl) -> PublicKey:
+        """Gets the verified identity public key for an authenticated session."""
+        return self._server.get_client_identity(hdl)
+
+    def send_to_identity(self, identity_pk, payload):
+        """Sends a payload to a specific client identified by their public key."""
+        self._server.send_to_identity(identity_pk, payload)
+
+    async def async_request_to_identity(self, identity_pk, payload) -> Payload:
+        """Sends a request to a client identified by their public key (async)."""
+        return await asyncio.to_thread(self._server.sync_request_to_identity, identity_pk, payload)
+
+    def sync_request_to_identity(self, identity_pk, payload) -> Payload:
+        """Sends a synchronous request to a client identified by their public key."""
+        return self._server.sync_request_to_identity(identity_pk, payload)
+
 
 class Client:
     """
@@ -486,6 +586,26 @@ class Client:
         key_view = _bindings.KeyPair()
         key_view.public_key = server_public_key
         self._client = _bindings.WsClient(key_view)
+
+    def set_client_identity(self, keypair):
+        """Sets the client's Ed25519 identity keypair for authentication.
+
+        The server will receive this identity during the handshake and can verify
+        it via the on_client_identity handler.
+
+        Args:
+            keypair: A KeyPair containing the client's Ed25519 keys.
+        """
+        self._client.set_client_identity(keypair)
+
+    def send_response(self, request_id, payload):
+        """Sends a response to a specific server-initiated request.
+
+        Args:
+            request_id: The ID of the request being responded to.
+            payload: The response payload.
+        """
+        self._client.send_response(request_id, payload)
 
     def connect(self, uri):
         """Connects to the server at the given WebSocket URI (e.g., "ws://localhost:9002")."""

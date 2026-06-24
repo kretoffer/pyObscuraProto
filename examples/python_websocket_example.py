@@ -32,14 +32,14 @@ def main():
     port = 9002
     server = Server()
 
-    @server.on_payload(OP_CLIENT_MSG)
+    @server.on_anon_payload(OP_CLIENT_MSG)
     def handle_client_message(hdl: ConnectionHdl, message: str, value: uint):
         print("\n--- Server Received Message ---")
         print(f"[SERVER] Received: message='{message}', value={value}")
 
         # Send a response back
         response = PayloadBuilder(OP_SERVER_RESPONSE).add_param("Hello from server!").build()
-        server.send(hdl, response)
+        server.send_anonymous(hdl, response)
 
         server_received_event.set()
 

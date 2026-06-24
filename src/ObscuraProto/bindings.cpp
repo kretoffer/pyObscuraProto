@@ -43,7 +43,17 @@ PYBIND11_MODULE(_obscuraproto, m) {
     // Keys
     py::class_<PublicKey>(m, "PublicKey")
         .def(py::init<>())
-        .def_readwrite("data", &PublicKey::data);
+        .def_readwrite("data", &PublicKey::data)
+        .def("__eq__", [](const PublicKey &self, const PublicKey &other) {
+            return self.data == other.data;
+        })
+        .def("__hash__", [](const PublicKey &self) {
+            return py::hash(py::bytes(
+                reinterpret_cast<const char*>(self.data.data()), self.data.size()));
+        })
+        .def("__repr__", [](const PublicKey &self) {
+            return "<obscuraproto.PublicKey>";
+        });
 
     py::class_<PrivateKey>(m, "PrivateKey")
         .def(py::init<>())
@@ -63,6 +73,9 @@ PYBIND11_MODULE(_obscuraproto, m) {
         .def(py::init<>())
         .def_readwrite("supported_versions", &ClientHello::supported_versions)
         .def_readwrite("ephemeral_pk", &ClientHello::ephemeral_pk)
+        .def_readwrite("has_client_identity", &ClientHello::has_client_identity)
+        .def_readwrite("identity_pk", &ClientHello::identity_pk)
+        .def_readwrite("identity_sig", &ClientHello::identity_sig)
         .def("serialize", &ClientHello::serialize)
         .def_static("deserialize", &ClientHello::deserialize);
 
@@ -240,7 +253,49 @@ PYBIND11_MODULE(_obscuraproto, m) {
         .def("register_incoming_stream_handler", [](WsServerWrapper &self,
             std::function<void(std::shared_ptr<Stream>)> callback) {
             self.register_incoming_stream_handler(std::move(callback));
-        }, "Register a handler for incoming streams from clients.");
+        }, "Register a handler for incoming streams from clients.")
+
+        // --- Anonymous Sessions ---
+        .def("send_anonymous", [](WsServerWrapper &self, WsConnectionHdlWrapper hdl, const Payload &payload) {
+            self.send_anonymous(hdl.hdl, payload);
+        }, "Send a payload to an anonymous session.")
+        .def("register_anon_op_handler", [](WsServerWrapper &self, Payload::OpCode op_code,
+                                            std::function<void(WsConnectionHdlWrapper, Payload)> callback) {
+            self.register_anon_op_handler(op_code, [callback](WsConnectionHdl hdl, Payload payload) {
+                callback(WsConnectionHdlWrapper{hdl}, payload);
+            });
+        }, "Register a handler for a specific opcode on anonymous sessions.")
+        .def("register_anon_request_handler", [](WsServerWrapper &self, Payload::OpCode op_code,
+                                                 std::function<Payload(WsConnectionHdlWrapper, PayloadReader&)> callback) {
+            self.register_anon_request_handler(op_code, [callback](WsConnectionHdl hdl, PayloadReader& reader) {
+                return callback(WsConnectionHdlWrapper{hdl}, reader);
+            });
+        }, "Register a request handler for anonymous sessions.")
+        .def("set_anon_default_payload_handler", [](WsServerWrapper &self,
+                                                     std::function<void(WsConnectionHdlWrapper, Payload)> callback) {
+            self.set_anon_default_payload_handler([callback](WsConnectionHdl hdl, Payload payload) {
+                callback(WsConnectionHdlWrapper{hdl}, payload);
+            });
+        }, "Sets the default handler for unhandled opcodes from anonymous clients.")
+
+        // --- Client Identity ---
+        .def("set_client_identity_handler", [](WsServerWrapper &self,
+                                                std::function<bool(WsConnectionHdlWrapper, PublicKey)> callback) {
+            self.set_client_identity_handler([callback](WsConnectionHdl hdl, PublicKey pk) {
+                return callback(WsConnectionHdlWrapper{hdl}, pk);
+            });
+        }, "Sets a handler that is called when a client authenticates with an identity key.")
+        .def("get_client_identity", [](WsServerWrapper &self, WsConnectionHdlWrapper hdl) {
+            return self.get_client_identity(hdl.hdl);
+        }, "Gets the verified identity public key for an authenticated session.")
+        .def("send_to_identity", &WsServerWrapper::send_to_identity,
+             "Send a payload to a specific client identified by their public key.")
+        .def("sync_request_to_identity", &WsServerWrapper::sync_request_to_identity,
+             py::call_guard<py::gil_scoped_release>(),
+             "Sends a synchronous request to a specific client identified by their public key.")
+        .def("send_response", [](WsServerWrapper &self, WsConnectionHdlWrapper hdl, uint32_t request_id, const Payload &payload) {
+            self.send_response(hdl.hdl, request_id, payload);
+        }, "Sends a response to a specific request.");
 
     // WS Client
     py::class_<WsClientWrapper>(m, "WsClient")
@@ -254,11 +309,15 @@ PYBIND11_MODULE(_obscuraproto, m) {
         .def("sync_request", [](WsClientWrapper &self, const Payload &payload) {
             return self.sync_request(payload);
         }, py::call_guard<py::gil_scoped_release>(), "Sends a request to the server and returns a response.")
+        .def("set_client_identity", &WsClientWrapper::set_client_identity,
+             "Sets the client's Ed25519 identity keypair for authentication.")
         .def("set_on_ready_callback", &WsClientWrapper::set_on_ready_callback)
         .def("set_on_disconnect_callback", &WsClientWrapper::set_on_disconnect_callback)
         .def("register_op_handler", &WsClientWrapper::register_op_handler)
         .def("register_request_handler", &WsClientWrapper::register_request_handler, "Register a request handler for a specific opcode, expecting a Payload response.")
         .def("set_default_payload_handler", &WsClientWrapper::set_default_payload_handler)
+        .def("send_response", &WsClientWrapper::send_response,
+             "Sends a response to a specific server-initiated request.")
         .def("start_stream", &WsClientWrapper::start_stream, py::call_guard<py::gil_scoped_release>(),
              "Start a new outgoing stream to the server.")
         .def("register_incoming_stream_handler", &WsClientWrapper::register_incoming_stream_handler,

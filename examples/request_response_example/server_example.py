@@ -25,7 +25,7 @@ async def main():
     port = 9003
     server = Server()
 
-    @server.on_request(OP_ADD_REQUEST)
+    @server.on_anon_request(OP_ADD_REQUEST)
     def handle_add_request(hdl: ConnectionHdl, a: int, b: int) -> Payload:
         print(f"[SERVER] Received add request: {a} + {b}")
         result = a + b
