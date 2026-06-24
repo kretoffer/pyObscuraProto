@@ -1,6 +1,5 @@
-# pyObscuraProto
-
 <p align="center">
+  <h1>pyObscuraProto</h1>
   <a href="https://github.com/kretoffer/pyObscuraProto/actions"><img src="https://img.shields.io/github/actions/workflow/status/kretoffer/pyObscuraProto/autotests.yml?style=for-the-badge&logo=github&label=tests&color=8A2BE2" alt="Tests"></a>
   <a href="https://github.com/kretoffer/pyObscuraProto/stargazers"><img src="https://img.shields.io/github/stars/kretoffer/pyObscuraProto?style=for-the-badge&logo=githubsponsors&logoColor=FFFFFF&label=stars&color=FFD700" alt="Stars"></a>
   <a href="https://github.com/kretoffer/pyObscuraProto/issues"><img src="https://img.shields.io/github/issues/kretoffer/pyObscuraProto?style=for-the-badge&logo=openbugbounty&logoColor=FFFFFF&label=issues&color=FF6B6B" alt="Issues"></a>

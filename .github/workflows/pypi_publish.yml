@@ -3,39 +3,136 @@ name: Python Package
 on:
   push:
     tags:
-      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.1
+      - 'v*'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  deploy:
+  build_wheels:
+    name: Build wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-13
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install cibuildwheel
+        run: pip install cibuildwheel
+      - name: Build wheels
+        run: python -m cibuildwheel --output-dir wheelhouse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: ./wheelhouse/*.whl
+
+  build_linux_aarch64:
+    name: Build wheels (linux-aarch64)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.14'
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install wheel setuptools twine cmake
-    - name: Build package
-      run: python setup.py sdist bdist_wheel
-    - name: Read Changelog
-      id: read_changelog
-      run: echo "CHANGELOG=$(cat CHANGELOG.md)" >> $GITHUB_OUTPUT
-    - name: Create GitHub Release
-      id: create_release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ github.ref_name }}
-        name: Release ${{ github.ref_name }}
-        body: ${{ steps.read_changelog.outputs.CHANGELOG }}
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - name: Publish package to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        user: __token__
-        password: ${{ secrets.PYPI_API_TOKEN }}
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Install cibuildwheel
+        run: pip install cibuildwheel
+      - name: Build aarch64 wheels
+        run: python -m cibuildwheel --output-dir wheelhouse
+        env:
+          CIBW_ARCHS_LINUX: aarch64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-aarch64
+          path: ./wheelhouse/*.whl
+
+  build_windows_arm64:
+    name: Build wheels (windows-arm64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install cibuildwheel
+        run: pip install cibuildwheel
+      - name: Build ARM64 wheels
+        run: python -m cibuildwheel --output-dir wheelhouse
+        env:
+          CIBW_ARCHS_WINDOWS: ARM64
+          CIBW_BEFORE_ALL_WINDOWS: >
+            git clone --depth=1 https://github.com/Microsoft/vcpkg.git vcpkg
+            && .\vcpkg\bootstrap-vcpkg.bat
+            && .\vcpkg\vcpkg install libsodium --triplet arm64-windows
+            && $env:CMAKE_TOOLCHAIN_FILE = "$pwd\vcpkg\scripts\buildsystems\vcpkg.cmake"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-arm64
+          path: ./wheelhouse/*.whl
+
+  build_sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Build sdist
+        run: |
+          pip install build
+          python -m build --sdist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  publish:
+    name: Release & Publish to PyPI
+    needs:
+      - build_wheels
+      - build_linux_aarch64
+      - build_windows_arm64
+      - build_sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+      - name: Read Changelog
+        id: read_changelog
+        run: |
+          echo 'CHANGELOG<<EOF' >> $GITHUB_OUTPUT
+          cat CHANGELOG.md >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          body: ${{ steps.read_changelog.outputs.CHANGELOG }}
+          files: dist/*
+          draft: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
