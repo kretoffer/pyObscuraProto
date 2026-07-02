@@ -11,6 +11,10 @@ manylinux-aarch64-image = "manylinux_2_28"
 [tool.cibuildwheel.linux]
 before-all = "yum install -y libsodium-devel"
 
+[[tool.cibuildwheel.overrides]]
+select = "*-musllinux_*"
+before-all = "apk add libsodium-dev"
+
 [tool.cibuildwheel.macos]
 before-all = "brew install libsodium"
 
@@ -19,6 +23,7 @@ before-all = """
 git clone --depth=1 https://github.com/Microsoft/vcpkg.git vcpkg
 .\\vcpkg\\bootstrap-vcpkg.bat
 .\\vcpkg\\vcpkg install libsodium --triplet x64-windows
+.\\vcpkg\\vcpkg install libsodium --triplet x86-windows
 """
 environment = { CMAKE_TOOLCHAIN_FILE = "{project}\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake" }
 

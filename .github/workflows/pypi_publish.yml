@@ -28,8 +28,12 @@ jobs:
           cache: 'pip'
       - name: Install cibuildwheel
         run: pip install 'cibuildwheel>=2.16,<3'
+        env:
+          PIP_REQUIRE_VIRTUALENV: false
       - name: Build wheels
         run: python -m cibuildwheel --output-dir wheelhouse
+        env:
+          CIBW_BUILD_VERBOSITY: 1
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
@@ -48,6 +52,8 @@ jobs:
         uses: docker/setup-qemu-action@v3
       - name: Install cibuildwheel
         run: pip install 'cibuildwheel>=2.16,<3'
+        env:
+          PIP_REQUIRE_VIRTUALENV: false
       - name: Build aarch64 wheels
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
@@ -75,9 +81,11 @@ jobs:
       - name: Build ARM64 wheels
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
+          CIBW_BUILD_VERBOSITY: 1
           CIBW_ARCHS_WINDOWS: ARM64
           CIBW_ENVIRONMENT_WINDOWS: |
             CMAKE_TOOLCHAIN_FILE=${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake
+            LIBSODIUM_ROOT=${{ github.workspace }}\vcpkg\installed\arm64-windows
           CIBW_BEFORE_ALL_WINDOWS: |
             git clone --depth=1 https://github.com/Microsoft/vcpkg.git vcpkg
             .\vcpkg\bootstrap-vcpkg.bat
@@ -100,6 +108,8 @@ jobs:
         run: |
           pip install build
           SETUPTOOLS_SCM_PRETEND_VERSION="${GITHUB_REF_NAME#v}" python -m build --sdist
+        env:
+          PIP_REQUIRE_VIRTUALENV: false
       - uses: actions/upload-artifact@v4
         with:
           name: sdist

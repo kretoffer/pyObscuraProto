@@ -16,6 +16,22 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(pybind11)
 
+# Find libsodium before fetching ObscuraProto — the upstream CMake uses
+# LIBSODIUM_INCLUDE_DIR / LIBSODIUM_LIBRARY.  By caching them here first,
+# the upstream's find_path / find_library will skip searching.
+# On Windows with vcpkg toolchain, CMAKE_FIND_ROOT_PATH is set to the vcpkg
+# install dir, so find_* without platform-specific HINTS locates libsodium.
+find_path(LIBSODIUM_INCLUDE_DIR NAMES sodium.h)
+find_library(LIBSODIUM_LIBRARY NAMES sodium libsodium)
+
+if(LIBSODIUM_INCLUDE_DIR AND LIBSODIUM_LIBRARY)
+    set(LIBSODIUM_INCLUDE_DIR "${LIBSODIUM_INCLUDE_DIR}" CACHE PATH "" FORCE)
+    set(LIBSODIUM_LIBRARY "${LIBSODIUM_LIBRARY}" CACHE FILEPATH "" FORCE)
+    message(STATUS "Found libsodium: ${LIBSODIUM_LIBRARY}")
+else()
+    message(WARNING "libsodium not found; ObscuraProto must find it independently")
+endif()
+
 FetchContent_Declare(
     ObscuraProto
     GIT_REPOSITORY https://github.com/ObscuraEcosystem/ObscuraProto.git
@@ -23,29 +39,12 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(ObscuraProto)
 
-# Find system libsodium and propagate to the obscuraproto target.
-# Handles all platforms: Linux (standard paths), macOS (Homebrew /opt/homebrew & /usr/local),
-# Windows (vcpkg / standard paths).
-find_library(SODIUM_LIBRARY sodium
-    HINTS
-        /opt/homebrew/lib
-        /usr/local/lib
-        /usr/lib
-        /usr/lib64
-)
-find_path(SODIUM_INCLUDE_DIR sodium.h
-    HINTS
-        /opt/homebrew/include
-        /usr/local/include
-        /usr/include
-)
-if(SODIUM_LIBRARY)
-    target_link_libraries(obscuraproto PUBLIC "${SODIUM_LIBRARY}")
-    message(STATUS "Found libsodium library: ${SODIUM_LIBRARY}")
+# Propagate libsodium to obscuraproto target
+if(LIBSODIUM_LIBRARY)
+    target_link_libraries(obscuraproto PUBLIC "${LIBSODIUM_LIBRARY}")
 endif()
-if(SODIUM_INCLUDE_DIR)
-    target_include_directories(obscuraproto PUBLIC "${SODIUM_INCLUDE_DIR}")
-    message(STATUS "Found libsodium include: ${SODIUM_INCLUDE_DIR}")
+if(LIBSODIUM_INCLUDE_DIR)
+    target_include_directories(obscuraproto PUBLIC "${LIBSODIUM_INCLUDE_DIR}")
 endif()
 
 pybind11_add_module(_obscuraproto src/ObscuraProto/bindings.cpp)
