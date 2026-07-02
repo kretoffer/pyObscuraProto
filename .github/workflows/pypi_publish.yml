@@ -27,7 +27,7 @@ jobs:
           python-version: '3.14'
           cache: 'pip'
       - name: Install cibuildwheel
-        run: pip install cibuildwheel
+        run: pip install 'cibuildwheel>=2.16,<3'
       - name: Build wheels
         run: python -m cibuildwheel --output-dir wheelhouse
       - uses: actions/upload-artifact@v4
@@ -47,7 +47,7 @@ jobs:
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Install cibuildwheel
-        run: pip install cibuildwheel
+        run: pip install 'cibuildwheel>=2.16,<3'
       - name: Build aarch64 wheels
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
@@ -66,17 +66,22 @@ jobs:
         with:
           python-version: '3.14'
           cache: 'pip'
+      - name: Set up MSVC ARM64 toolchain
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64_arm64
       - name: Install cibuildwheel
-        run: pip install cibuildwheel
+        run: pip install 'cibuildwheel>=2.16,<3'
       - name: Build ARM64 wheels
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
           CIBW_ARCHS_WINDOWS: ARM64
-          CIBW_BEFORE_ALL_WINDOWS: >
+          CIBW_ENVIRONMENT_WINDOWS: |
+            CMAKE_TOOLCHAIN_FILE=${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake
+          CIBW_BEFORE_ALL_WINDOWS: |
             git clone --depth=1 https://github.com/Microsoft/vcpkg.git vcpkg
-            && .\vcpkg\bootstrap-vcpkg.bat
-            && .\vcpkg\vcpkg install libsodium --triplet arm64-windows
-            && $env:CMAKE_TOOLCHAIN_FILE = "$pwd\vcpkg\scripts\buildsystems\vcpkg.cmake"
+            .\vcpkg\bootstrap-vcpkg.bat
+            .\vcpkg\vcpkg install libsodium --triplet arm64-windows
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-windows-arm64
@@ -94,7 +99,7 @@ jobs:
       - name: Build sdist
         run: |
           pip install build
-          python -m build --sdist
+          SETUPTOOLS_SCM_PRETEND_VERSION="${GITHUB_REF_NAME#v}" python -m build --sdist
       - uses: actions/upload-artifact@v4
         with:
           name: sdist
@@ -119,18 +124,12 @@ jobs:
         with:
           name: sdist
           path: dist
-      - name: Read Changelog
-        id: read_changelog
-        run: |
-          echo 'CHANGELOG<<EOF' >> $GITHUB_OUTPUT
-          cat CHANGELOG.md >> $GITHUB_OUTPUT
-          echo 'EOF' >> $GITHUB_OUTPUT
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
-          body: ${{ steps.read_changelog.outputs.CHANGELOG }}
+          body_path: CHANGELOG.md
           files: dist/*
           draft: true
         env:

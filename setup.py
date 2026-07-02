@@ -81,7 +81,7 @@ class CMakeBuild(build_ext):
 
 setup(
     name="pyObscuraProto",
-    version="1.0",  # Placeholder version
+    use_scm_version=True,
     author="Kretov Artem",
     author_email="20kretovartem000@gmail.com",
     description="A Python wrapper for ObscuraProto",
@@ -92,6 +92,6 @@ setup(
     ext_modules=[CMakeExtension("ObscuraProto._obscuraproto", sourcedir=".")],
     cmdclass={"build_ext": CMakeBuild},
     python_requires=">=3.13",
-    install_requires=["pybind11>=2.11.1"],
+    install_requires=[],
     zip_safe=False,
 )
